@@ -18,7 +18,9 @@ static const Key keys[] = {
     /* Mod                 Tecla         Função      Argumento */
 
     { MODKEY,              XK_Return,       execsh,        {.s = "alacritty"}    },
-    { MODKEY|ShiftMask,    XK_q,         quit,       {0} },
+    { MODKEY,              XK_n,            cww,           {0} },
+    { MODKEY,              XK_space,        sl,            {0} },
+    { MODKEY|ShiftMask,    XK_q,            quit,          {0} },
 };
 
 static const unsigned int nkeys =

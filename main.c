@@ -1,3 +1,4 @@
+#include <X11/cursorfont.h>
 #include <X11/keysym.h>
 
 #include <X11/Xutil.h>
@@ -31,11 +32,13 @@ int xerror(Display *d, XErrorEvent * e) {
   (void)d;
   printf("Error code: %d\n", e -> error_code);
   printf("Resource: %lu\n", e -> resourceid);
+  printf("Request: %d\n", e->request_code);
+  printf("Minor: %d\n", e->minor_code);
   return 0;
 }
 
 /* Existent Clients */
-int ec() {
+int ec(void) {
   int count = 0;
 
   for (int i = 0; i < MAX_CLIENTS; i++) {
@@ -49,7 +52,7 @@ int ec() {
 /* Stack Layout */
 void sl(const Arg *arg) {
   (void)arg;
-  int t = ec(w, MAX_CLIENTS);
+  int t = ec();
 
   if (t == 0)
     return;
@@ -97,7 +100,7 @@ void sl(const Arg *arg) {
 /* Windows Grid */
 void wg(const Arg *arg) {
   (void)arg;
-  int total = ec(w, MAX_CLIENTS);
+  int total = ec();
 
   if (total == 0)
     return;
@@ -164,7 +167,39 @@ int fci(Window win) {
   return -1;
 }
 
-int ffci() {
+int mci(Window win) {
+  Window current = win;
+
+  while (current != None) {
+    int index = fci(current);
+    if (index != -1) {
+      return index;
+    }
+
+    Window root_return;
+    Window parent_return;
+    Window *children = NULL;
+    unsigned int nchildren = 0;
+
+    if (!XQueryTree(d, current, &root_return, &parent_return, &children, &nchildren)) {
+      return -1;
+    }
+
+    if (children != NULL) {
+      XFree(children);
+    }
+
+    if (parent_return == current || parent_return == None) {
+      break;
+    }
+
+    current = parent_return;
+  }
+
+  return -1;
+}
+
+int ffci(void) {
   /* Find Free Client Index */
   for (int i = 0; i < MAX_CLIENTS; i++) {
     if (w[i].win == None) {
@@ -172,6 +207,55 @@ int ffci() {
     }
   }
   return -1;
+}
+
+void grabbers(void) {
+  unsigned int modifiers[] = {0, LockMask, Mod2Mask, LockMask | Mod2Mask};
+
+  for (unsigned int i = 0; i < nkeys; i++) {
+    KeyCode code = XKeysymToKeycode(d, keys[i].key);
+    if (code == 0) continue;
+
+    for (unsigned int j = 0; j < sizeof(modifiers) / sizeof(modifiers[0]); j++) {
+      XGrabKey(
+        d,
+        code,
+        keys[i].mod | modifiers[j],
+        root,
+        True,
+        GrabModeAsync,
+        GrabModeAsync
+      );
+    }
+  }
+}
+
+void grabbuttons(Window win) {
+  XGrabButton(
+    d,
+    Button1,
+    MODKEY,
+    win,
+    False,
+    ButtonPressMask | ButtonReleaseMask | PointerMotionMask,
+    GrabModeAsync,
+    GrabModeAsync,
+    None,
+    None
+  );
+
+  XGrabButton(
+    d,
+    Button3,
+    MODKEY,
+    win,
+    False,
+    ButtonPressMask | ButtonReleaseMask | PointerMotionMask,
+    GrabModeAsync,
+    GrabModeAsync,
+    None,
+    None
+  );
 }
 
 /* Up is functions  */
@@ -197,7 +281,6 @@ void quit(const Arg *arg) /* Quit, Breaks a window */
               w[c - 1].win = None;
 
               int n = nc(c);
-              idx-=1;
               if (n != -1) {
                 active = w[n].win;
                 idx = n;
@@ -205,6 +288,12 @@ void quit(const Arg *arg) /* Quit, Breaks a window */
                 active = None;
                 idx = -1;
               };
+
+              int near = nc(idx);
+              Client wind = w[near];
+
+              active = wind.win;
+
               w[c - 1].win = None;
               w[c - 1].mode = NONE;
   };
@@ -214,6 +303,7 @@ void tfc(const Arg *arg) /* Toggle FullScreen */
 {
   (void)arg;
   XWindowAttributes attr;
+  if (idx < 0 || idx >= MAX_CLIENTS) return;
   int active = w[idx].win;
   XGetWindowAttributes(d, active, & attr);
     if (!w[idx].fullscreen) {
@@ -249,7 +339,7 @@ void tfc(const Arg *arg) /* Toggle FullScreen */
 void cww(const Arg *arg) /* Create White Window */
 {
   (void)arg;
-  int i = ffci(w, MAX_CLIENTS);
+  int i = ffci();
         if (i != -1) {
           printf("I -> %d", i);
 
@@ -272,7 +362,8 @@ void cww(const Arg *arg) /* Create White Window */
           w[i].old_h = 200;
           w[i].mode = NONE;
 
-          XSelectInput(d, w[i].win, ButtonPressMask | PointerMotionMask | ButtonReleaseMask | KeyPressMask);
+          XSelectInput(d, w[i].win, EnterWindowMask | StructureNotifyMask | PropertyChangeMask);
+          grabbuttons(w[i].win);
 
           XMapWindow(d, w[i].win);
           XFlush(d);
@@ -315,6 +406,8 @@ void nf(const Arg *arg)
   idx = fci(active);
     if (idx != -1) {
       int n = nc(idx);
+
+      if (n == -1) return;
 
       idx = n;
       active = w[idx].win;
@@ -361,10 +454,14 @@ int main() {
 
   root = DefaultRootWindow(d);
 
+  Cursor cursor = XCreateFontCursor(d, XC_left_ptr);
+  XDefineCursor(d, root, cursor);
+
   wi = DisplayWidth(d, DefaultScreen(d));
   h = DisplayHeight(d, DefaultScreen(d));
 
   XSelectInput(d, root, KeyPressMask | SubstructureRedirectMask | SubstructureNotifyMask);
+  grabbers(); /* Grab the keys, just that! */
   XEvent e;
 
   while (1) {
@@ -374,7 +471,7 @@ int main() {
       Window win = e.xmaprequest.window;
       printf("MapRequest");
 
-      int i = ffci(w, MAX_CLIENTS);
+      int i = ffci();
 
       if (i == -1) continue;
 
@@ -385,13 +482,14 @@ int main() {
       XSelectInput(
         d,
         win,
-        ButtonPressMask |
-        ButtonReleaseMask |
-        PointerMotionMask |
-        KeyPressMask
+        EnterWindowMask |
+        StructureNotifyMask |
+        PropertyChangeMask
       );
+      grabbuttons(win);
 
       XMapWindow(d, win);
+      XSetInputFocus(d, win, RevertToPointerRoot, CurrentTime);
 
       active = win;
       idx = i;
@@ -400,6 +498,9 @@ int main() {
     if (e.type == ConfigureRequest) {
     XConfigureRequestEvent *ev = &e.xconfigurerequest;
 
+      int i = fci(ev->window);
+
+      if (i != -1) continue;
     XWindowChanges wc;
 
     wc.x = ev->x;
@@ -429,30 +530,74 @@ int main() {
       }
     }
 
-    if ((e.xbutton.state & Mod1Mask) && e.type == ButtonPress) {
+    if (e.type == ButtonPress) {
       active = e.xbutton.window;
       if (active != old_active) {
         if (old_active != None) XSetWindowBorder(d, old_active, 0x000000);
         if (active != None) XSetWindowBorder(d, active, 0xff0000);
         old_active = active;
       }
-      idx = fci(active);
+      idx = mci(active);
       if (idx != -1) {
+
+        active = w[idx].win;
+
+        XSetInputFocus(d, active, RevertToPointerRoot, CurrentTime);
         XRaiseWindow(d, active);
-        if (e.xbutton.button == 1) {
-          w[idx].mode = MOVE;
-          offset_x = e.xbutton.x;
-          offset_y = e.xbutton.y;
-        } else if (e.xbutton.button == 3) {
+
+        if ((e.xbutton.state & MODKEY) && e.xbutton.button == Button1) {
+
+            w[idx].mode = MOVE;
+
+            offset_x = e.xbutton.x;
+            offset_y = e.xbutton.y;
+
+
+            XGrabPointer(
+                d,
+                root,
+                False,
+                PointerMotionMask |
+                ButtonReleaseMask,
+                GrabModeAsync,
+                GrabModeAsync,
+                None,
+                None,
+                CurrentTime
+            );
+
+        } else if ((e.xbutton.state & MODKEY) && e.xbutton.button == Button3) {
           w[idx].mode = RESIZE;
           start_y = e.xbutton.y_root;
           start_x = e.xbutton.x_root;
+
+          XGrabPointer(
+        d,
+        root,
+        False,
+        PointerMotionMask | ButtonReleaseMask,
+        GrabModeAsync,
+        GrabModeAsync,
+        None,
+        None,
+        CurrentTime
+    );
         };
-      } else {
-        // active = None;
-        // idx = -1;
       }
     };
+
+    if (e.type == EnterNotify) {
+      idx = mci(e.xcrossing.window);
+      if (idx != -1) {
+        active = w[idx].win;
+        if (active != old_active) {
+          if (old_active != None) XSetWindowBorder(d, old_active, 0x000000);
+          XSetWindowBorder(d, active, 0xff0000);
+          old_active = active;
+        }
+        XSetInputFocus(d, active, RevertToPointerRoot, CurrentTime);
+      }
+    }
 
     if (e.type == KeyPress) {
       key = XLookupKeysym( &
@@ -499,9 +644,9 @@ int main() {
     };
 
     if (e.type == ButtonRelease) {
-      if (idx != -1) {
-        w[idx].mode = NONE;
-      };
+      if (idx != -1) w[idx].mode = NONE;
+
+      XUngrabPointer(d, CurrentTime);
     }
   };
 
